@@ -1,0 +1,89 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<?import javafx.geometry.Insets?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.text.Text?>
+
+<VBox spacing="10" xmlns="http://javafx.com/javafx/17" xmlns:fx="http://javafx.com/fxml/1" 
+      fx:controller="com.redsecai.controller.MainController" styleClass="main-container">
+    
+    <padding>
+        <Insets top="20" right="20" bottom="20" left="20"/>
+    </padding>
+    
+    <!-- Header -->
+    <HBox spacing="10" alignment="CENTER_LEFT">
+        <Text styleClass="header-title" text="RedSecAI - Adversary Emulation System"/>
+    </HBox>
+    
+    <!-- Scan Configuration -->
+    <VBox spacing="10" styleClass="config-panel">
+        <Text styleClass="section-title" text="Scan Configuration"/>
+        
+        <GridPane hgap="10" vgap="10">
+            <Label text="Target:" GridPane.columnIndex="0" GridPane.rowIndex="0"/>
+            <TextField fx:id="targetTextField" promptText="Enter URL or domain (e.g., example.com)" 
+                       GridPane.columnIndex="1" GridPane.rowIndex="0" GridPane.columnSpan="2"/>
+            
+            <Label text="Scope:" GridPane.columnIndex="0" GridPane.rowIndex="1"/>
+            <ComboBox fx:id="scopeComboBox" GridPane.columnIndex="1" GridPane.rowIndex="1" prefWidth="200"/>
+            
+            <CheckBox fx:id="safeModeCheckBox" text="Safe Mode (Non-destructive)" selected="true" 
+                      GridPane.columnIndex="0" GridPane.rowIndex="2" GridPane.columnSpan="3"/>
+        </GridPane>
+        
+        <HBox spacing="10" alignment="CENTER_LEFT">
+            <Button fx:id="startScanButton" text="Start Scan" styleClass="primary-button"/>
+            <Button fx:id="cancelButton" text="Cancel" disable="true" styleClass="secondary-button"/>
+            <ProgressBar fx:id="progressBar" prefWidth="300" progress="0"/>
+            <Text fx:id="statusText" text="Ready to scan"/>
+        </HBox>
+    </VBox>
+    
+    <!-- Main Content Tabs -->
+    <TabPane fx:id="mainTabPane" tabClosingPolicy="UNAVAILABLE" VBox.vgrow="ALWAYS">
+        
+        <!-- Findings Tab -->
+        <Tab fx:id="findingsTab" text="Findings">
+            <VBox spacing="10">
+                <padding>
+                    <Insets top="10" right="10" bottom="10" left="10"/>
+                </padding>
+                <Text styleClass="section-title" text="Security Findings"/>
+                <ListView fx:id="findingsListView" VBox.vgrow="ALWAYS"/>
+            </VBox>
+        </Tab>
+        
+        <!-- Attack Paths Tab -->
+        <Tab fx:id="attackPathsTab" text="Attack Paths">
+            <VBox spacing="10">
+                <padding>
+                    <Insets top="10" right="10" bottom="10" left="10"/>
+                </padding>
+                <Text styleClass="section-title" text="Simulated Attack Paths"/>
+                <ListView fx:id="attackPathsListView" VBox.vgrow="ALWAYS"/>
+            </VBox>
+        </Tab>
+        
+        <!-- Report Tab -->
+        <Tab fx:id="reportTab" text="Reports">
+            <TabPane tabClosingPolicy="UNAVAILABLE">
+                <Tab text="Executive Summary">
+                    <TextArea fx:id="executiveSummaryTextArea" wrapText="true" editable="false"/>
+                </Tab>
+                <Tab text="Technical Report">
+                    <TextArea fx:id="technicalReportTextArea" wrapText="true" editable="false"/>
+                </Tab>
+                <Tab text="Remediation Guide">
+                    <TextArea fx:id="remediationTextArea" wrapText="true" editable="false"/>
+                </Tab>
+            </TabPane>
+        </Tab>
+        
+        <!-- Logs Tab -->
+        <Tab text="Logs">
+            <TextArea fx:id="logTextArea" editable="false" styleClass="log-area"/>
+        </Tab>
+    </TabPane>
+</VBox>

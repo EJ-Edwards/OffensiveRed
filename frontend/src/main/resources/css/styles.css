@@ -1,0 +1,177 @@
+/* RedSecAI GUI Styles */
+
+.root {
+    -fx-font-family: "Segoe UI", "Helvetica", "Arial", sans-serif;
+    -fx-font-size: 14px;
+    -fx-background-color: #1e1e1e;
+}
+
+.main-container {
+    -fx-background-color: #1e1e1e;
+}
+
+.header-title {
+    -fx-font-size: 24px;
+    -fx-font-weight: bold;
+    -fx-fill: #ffffff;
+}
+
+.section-title {
+    -fx-font-size: 16px;
+    -fx-font-weight: bold;
+    -fx-fill: #00d4ff;
+}
+
+.config-panel {
+    -fx-background-color: #2d2d2d;
+    -fx-padding: 15;
+    -fx-background-radius: 5;
+}
+
+/* Buttons */
+.primary-button {
+    -fx-background-color: #00d4ff;
+    -fx-text-fill: #1e1e1e;
+    -fx-font-weight: bold;
+    -fx-background-radius: 5;
+    -fx-padding: 10 20;
+}
+
+.primary-button:hover {
+    -fx-background-color: #00b8e6;
+}
+
+.primary-button:disabled {
+    -fx-background-color: #555;
+    -fx-text-fill: #888;
+}
+
+.secondary-button {
+    -fx-background-color: #ff6b6b;
+    -fx-text-fill: #ffffff;
+    -fx-font-weight: bold;
+    -fx-background-radius: 5;
+    -fx-padding: 10 20;
+}
+
+.secondary-button:hover {
+    -fx-background-color: #e65555;
+}
+
+.secondary-button:disabled {
+    -fx-background-color: #555;
+    -fx-text-fill: #888;
+}
+
+/* Text Fields and Combo Boxes */
+.text-field, .combo-box {
+    -fx-background-color: #3d3d3d;
+    -fx-text-fill: #ffffff;
+    -fx-background-radius: 5;
+    -fx-padding: 8;
+}
+
+.text-field:focused {
+    -fx-border-color: #00d4ff;
+    -fx-border-width: 2;
+}
+
+.combo-box {
+    -fx-background-color: #3d3d3d;
+    -fx-text-fill: #ffffff;
+}
+
+.combo-box .list-cell {
+    -fx-background-color: #3d3d3d;
+    -fx-text-fill: #ffffff;
+}
+
+/* Labels */
+.label {
+    -fx-text-fill: #cccccc;
+}
+
+/* Check Box */
+.check-box {
+    -fx-text-fill: #cccccc;
+}
+
+.check-box .box {
+    -fx-background-color: #3d3d3d;
+    -fx-border-color: #00d4ff;
+}
+
+.check-box:selected .mark {
+    -fx-background-color: #00d4ff;
+}
+
+/* Progress Bar */
+.progress-bar {
+    -fx-accent: #00d4ff;
+}
+
+/* Tab Pane */
+.tab-pane {
+    -fx-background-color: #2d2d2d;
+}
+
+.tab {
+    -fx-background-color: #3d3d3d;
+    -fx-text-fill: #cccccc;
+    -fx-background-radius: 5 5 0 0;
+}
+
+.tab:selected {
+    -fx-background-color: #00d4ff;
+    -fx-text-fill: #1e1e1e;
+}
+
+.tab-content-area {
+    -fx-background-color: #2d2d2d;
+}
+
+/* List View */
+.list-view {
+    -fx-background-color: #3d3d3d;
+    -fx-border-color: #555;
+}
+
+.list-cell {
+    -fx-background-color: #3d3d3d;
+    -fx-text-fill: #ffffff;
+    -fx-padding: 10;
+}
+
+.list-cell:hover {
+    -fx-background-color: #4d4d4d;
+}
+
+/* Text Area */
+.text-area {
+    -fx-background-color: #3d3d3d;
+    -fx-text-fill: #ffffff;
+    -fx-border-color: #555;
+}
+
+.text-area .content {
+    -fx-background-color: #3d3d3d;
+}
+
+.log-area {
+    -fx-font-family: "Consolas", "Courier New", monospace;
+    -fx-font-size: 12px;
+}
+
+/* Scroll Bar */
+.scroll-bar {
+    -fx-background-color: #2d2d2d;
+}
+
+.scroll-bar .thumb {
+    -fx-background-color: #555;
+    -fx-background-radius: 5;
+}
+
+.scroll-bar .thumb:hover {
+    -fx-background-color: #777;
+}

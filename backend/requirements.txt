@@ -1,0 +1,9 @@
+# OffensiveRed / RedSecAI backend dependencies.
+#
+# The scan engine is the upstream Decepticon framework; everything else
+# (fastapi, uvicorn, pydantic, langgraph-sdk, ...) is pulled in transitively.
+#   pip install decepticon
+#
+# Running an actual scan additionally requires the Decepticon LangGraph runtime
+# and an LLM provider to be configured -- see the Decepticon documentation.
+decepticon>=1.1
