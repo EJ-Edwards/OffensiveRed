@@ -1,8 +1,9 @@
 """FastAPI application for the OffensiveRed / RedSecAI backend.
 
 A thin HTTP shell the JavaFX GUI talks to. Every scan is executed by the real
-``decepticon`` framework via :mod:`backend.runner`; this layer only translates
-GUI requests into CLI runs and the resulting SARIF back into JSON.
+``decepticon`` library in-process via :mod:`backend.runner`; this layer only
+translates GUI requests into library runs and the resulting findings back into
+JSON.
 
 Run from the repository root with::
 
@@ -42,7 +43,13 @@ runner = DecepticonRunner()
 
 @app.get("/health")
 async def health() -> dict:
-    return {"status": "ok", "engine": "decepticon", "version": app.version}
+    return {
+        "status": "ok",
+        "engine": "decepticon",
+        "integration": "library",
+        "agent": runner.role,
+        "version": app.version,
+    }
 
 
 @app.post("/scan/start", response_model=ScanStartResponse)

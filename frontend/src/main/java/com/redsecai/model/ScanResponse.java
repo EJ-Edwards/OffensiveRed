@@ -1,8 +1,11 @@
 package com.redsecai.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
 /**
- * Model for scan response
+ * Response from {@code POST /scan/start}.
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class ScanResponse {
     private String scanId;
     private String status;

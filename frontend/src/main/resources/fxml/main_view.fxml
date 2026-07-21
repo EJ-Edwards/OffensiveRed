@@ -3,87 +3,150 @@
 <?import javafx.geometry.Insets?>
 <?import javafx.scene.control.*?>
 <?import javafx.scene.layout.*?>
-<?import javafx.scene.text.Text?>
 
-<VBox spacing="10" xmlns="http://javafx.com/javafx/17" xmlns:fx="http://javafx.com/fxml/1" 
-      fx:controller="com.redsecai.controller.MainController" styleClass="main-container">
-    
-    <padding>
-        <Insets top="20" right="20" bottom="20" left="20"/>
-    </padding>
-    
-    <!-- Header -->
-    <HBox spacing="10" alignment="CENTER_LEFT">
-        <Text styleClass="header-title" text="RedSecAI - Adversary Emulation System"/>
+<VBox xmlns="http://javafx.com/javafx/17" xmlns:fx="http://javafx.com/fxml/1"
+      fx:controller="com.redsecai.controller.MainController"
+      styleClass="root-pane" spacing="0">
+
+    <!-- App bar -->
+    <HBox styleClass="app-bar" alignment="CENTER_LEFT" spacing="14">
+        <padding><Insets top="14" right="22" bottom="14" left="22"/></padding>
+        <VBox spacing="1">
+            <Label styleClass="app-title" text="RedSecAI"/>
+            <Label styleClass="app-subtitle" text="Decepticon-powered adversary emulation"/>
+        </VBox>
+        <Region HBox.hgrow="ALWAYS"/>
+        <Label fx:id="backendStatusLabel" styleClass="status-pill" text="Backend: checking…"/>
     </HBox>
-    
-    <!-- Scan Configuration -->
-    <VBox spacing="10" styleClass="config-panel">
-        <Text styleClass="section-title" text="Scan Configuration"/>
-        
-        <GridPane hgap="10" vgap="10">
-            <Label text="Target:" GridPane.columnIndex="0" GridPane.rowIndex="0"/>
-            <TextField fx:id="targetTextField" promptText="Enter URL or domain (e.g., example.com)" 
-                       GridPane.columnIndex="1" GridPane.rowIndex="0" GridPane.columnSpan="2"/>
-            
-            <Label text="Scope:" GridPane.columnIndex="0" GridPane.rowIndex="1"/>
-            <ComboBox fx:id="scopeComboBox" GridPane.columnIndex="1" GridPane.rowIndex="1" prefWidth="200"/>
-            
-            <CheckBox fx:id="safeModeCheckBox" text="Safe Mode (Non-destructive)" selected="true" 
-                      GridPane.columnIndex="0" GridPane.rowIndex="2" GridPane.columnSpan="3"/>
-        </GridPane>
-        
-        <HBox spacing="10" alignment="CENTER_LEFT">
-            <Button fx:id="startScanButton" text="Start Scan" styleClass="primary-button"/>
-            <Button fx:id="cancelButton" text="Cancel" disable="true" styleClass="secondary-button"/>
-            <ProgressBar fx:id="progressBar" prefWidth="300" progress="0"/>
-            <Text fx:id="statusText" text="Ready to scan"/>
+
+    <VBox styleClass="content" spacing="14" VBox.vgrow="ALWAYS">
+        <padding><Insets top="16" right="22" bottom="18" left="22"/></padding>
+
+        <!-- Engagement configuration -->
+        <VBox styleClass="card" spacing="12">
+            <Label styleClass="card-title" text="Engagement configuration"/>
+            <HBox spacing="14" alignment="BOTTOM_LEFT">
+                <VBox spacing="5" HBox.hgrow="ALWAYS">
+                    <Label styleClass="field-label" text="Target"/>
+                    <TextField fx:id="targetTextField"
+                               promptText="URL, domain, or repository you are authorized to test"/>
+                </VBox>
+                <VBox spacing="5">
+                    <Label styleClass="field-label" text="Scope"/>
+                    <ComboBox fx:id="scopeComboBox" prefWidth="180"/>
+                </VBox>
+            </HBox>
+            <HBox spacing="12" alignment="CENTER_LEFT">
+                <CheckBox fx:id="safeModeCheckBox"
+                          text="Safe mode — passive, non-destructive checks only" selected="true"/>
+                <Region HBox.hgrow="ALWAYS"/>
+                <Button fx:id="cancelButton" text="Stop watching" onAction="#cancelScan"
+                        styleClass="btn-ghost" disable="true"/>
+                <Button fx:id="startScanButton" text="Start engagement" onAction="#startScan"
+                        styleClass="btn-primary"/>
+            </HBox>
+        </VBox>
+
+        <!-- Run status bar -->
+        <HBox styleClass="status-bar" alignment="CENTER_LEFT" spacing="12">
+            <padding><Insets top="10" right="16" bottom="10" left="16"/></padding>
+            <Label fx:id="statusDot" styleClass="status-dot" text="●"/>
+            <Label fx:id="statusLabel" styleClass="status-text" text="Idle"/>
+            <Region HBox.hgrow="ALWAYS"/>
+            <ProgressBar fx:id="progressBar" styleClass="run-progress" prefWidth="280" progress="0"/>
         </HBox>
+
+        <!-- Result tabs -->
+        <TabPane fx:id="mainTabPane" tabClosingPolicy="UNAVAILABLE" VBox.vgrow="ALWAYS">
+
+            <Tab text="Overview">
+                <ScrollPane fitToWidth="true" styleClass="overview-scroll">
+                    <VBox styleClass="tab-body" spacing="16">
+                        <padding><Insets top="18" right="18" bottom="18" left="18"/></padding>
+
+                        <Label styleClass="section-title" text="Findings by severity"/>
+                        <HBox spacing="12">
+                            <VBox styleClass="stat-tile-critical" alignment="CENTER" HBox.hgrow="ALWAYS">
+                                <Label fx:id="countCritical" styleClass="stat-number" text="0"/>
+                                <Label styleClass="stat-caption" text="Critical"/>
+                            </VBox>
+                            <VBox styleClass="stat-tile-high" alignment="CENTER" HBox.hgrow="ALWAYS">
+                                <Label fx:id="countHigh" styleClass="stat-number" text="0"/>
+                                <Label styleClass="stat-caption" text="High"/>
+                            </VBox>
+                            <VBox styleClass="stat-tile-medium" alignment="CENTER" HBox.hgrow="ALWAYS">
+                                <Label fx:id="countMedium" styleClass="stat-number" text="0"/>
+                                <Label styleClass="stat-caption" text="Medium"/>
+                            </VBox>
+                            <VBox styleClass="stat-tile-low" alignment="CENTER" HBox.hgrow="ALWAYS">
+                                <Label fx:id="countLow" styleClass="stat-number" text="0"/>
+                                <Label styleClass="stat-caption" text="Low"/>
+                            </VBox>
+                            <VBox styleClass="stat-tile-info" alignment="CENTER" HBox.hgrow="ALWAYS">
+                                <Label fx:id="countInfo" styleClass="stat-number" text="0"/>
+                                <Label styleClass="stat-caption" text="Info"/>
+                            </VBox>
+                            <VBox styleClass="stat-tile-total" alignment="CENTER" HBox.hgrow="ALWAYS">
+                                <Label fx:id="countTotal" styleClass="stat-number" text="0"/>
+                                <Label styleClass="stat-caption" text="Total"/>
+                            </VBox>
+                        </HBox>
+
+                        <Label styleClass="section-title" text="Engagement"/>
+                        <GridPane styleClass="info-grid" hgap="18" vgap="10">
+                            <Label styleClass="info-key" text="Target"
+                                   GridPane.columnIndex="0" GridPane.rowIndex="0"/>
+                            <Label fx:id="ovTarget" styleClass="info-value" text="—"
+                                   GridPane.columnIndex="1" GridPane.rowIndex="0"/>
+                            <Label styleClass="info-key" text="Engagement"
+                                   GridPane.columnIndex="0" GridPane.rowIndex="1"/>
+                            <Label fx:id="ovEngagement" styleClass="info-value" text="—"
+                                   GridPane.columnIndex="1" GridPane.rowIndex="1"/>
+                            <Label styleClass="info-key" text="Agent"
+                                   GridPane.columnIndex="0" GridPane.rowIndex="2"/>
+                            <Label fx:id="ovAgent" styleClass="info-value" text="—"
+                                   GridPane.columnIndex="1" GridPane.rowIndex="2"/>
+                            <Label styleClass="info-key" text="Scan mode"
+                                   GridPane.columnIndex="0" GridPane.rowIndex="3"/>
+                            <Label fx:id="ovScanMode" styleClass="info-value" text="—"
+                                   GridPane.columnIndex="1" GridPane.rowIndex="3"/>
+                            <Label styleClass="info-key" text="Status"
+                                   GridPane.columnIndex="0" GridPane.rowIndex="4"/>
+                            <Label fx:id="ovStatus" styleClass="info-value" text="—"
+                                   GridPane.columnIndex="1" GridPane.rowIndex="4"/>
+                        </GridPane>
+                    </VBox>
+                </ScrollPane>
+            </Tab>
+
+            <Tab text="Findings">
+                <VBox styleClass="tab-body" spacing="10">
+                    <padding><Insets top="14" right="14" bottom="14" left="14"/></padding>
+                    <Label styleClass="section-title" text="Security findings"/>
+                    <ListView fx:id="findingsListView" styleClass="findings-list" VBox.vgrow="ALWAYS"/>
+                </VBox>
+            </Tab>
+
+            <Tab text="Reports">
+                <TabPane styleClass="report-tabs" tabClosingPolicy="UNAVAILABLE">
+                    <Tab text="Executive Summary">
+                        <TextArea fx:id="executiveSummaryTextArea" styleClass="report-area"
+                                  wrapText="true" editable="false"/>
+                    </Tab>
+                    <Tab text="Technical Report">
+                        <TextArea fx:id="technicalReportTextArea" styleClass="report-area"
+                                  wrapText="true" editable="false"/>
+                    </Tab>
+                    <Tab text="Remediation Guide">
+                        <TextArea fx:id="remediationTextArea" styleClass="report-area"
+                                  wrapText="true" editable="false"/>
+                    </Tab>
+                </TabPane>
+            </Tab>
+
+            <Tab text="Logs">
+                <TextArea fx:id="logTextArea" styleClass="log-area" editable="false"/>
+            </Tab>
+        </TabPane>
     </VBox>
-    
-    <!-- Main Content Tabs -->
-    <TabPane fx:id="mainTabPane" tabClosingPolicy="UNAVAILABLE" VBox.vgrow="ALWAYS">
-        
-        <!-- Findings Tab -->
-        <Tab fx:id="findingsTab" text="Findings">
-            <VBox spacing="10">
-                <padding>
-                    <Insets top="10" right="10" bottom="10" left="10"/>
-                </padding>
-                <Text styleClass="section-title" text="Security Findings"/>
-                <ListView fx:id="findingsListView" VBox.vgrow="ALWAYS"/>
-            </VBox>
-        </Tab>
-        
-        <!-- Attack Paths Tab -->
-        <Tab fx:id="attackPathsTab" text="Attack Paths">
-            <VBox spacing="10">
-                <padding>
-                    <Insets top="10" right="10" bottom="10" left="10"/>
-                </padding>
-                <Text styleClass="section-title" text="Simulated Attack Paths"/>
-                <ListView fx:id="attackPathsListView" VBox.vgrow="ALWAYS"/>
-            </VBox>
-        </Tab>
-        
-        <!-- Report Tab -->
-        <Tab fx:id="reportTab" text="Reports">
-            <TabPane tabClosingPolicy="UNAVAILABLE">
-                <Tab text="Executive Summary">
-                    <TextArea fx:id="executiveSummaryTextArea" wrapText="true" editable="false"/>
-                </Tab>
-                <Tab text="Technical Report">
-                    <TextArea fx:id="technicalReportTextArea" wrapText="true" editable="false"/>
-                </Tab>
-                <Tab text="Remediation Guide">
-                    <TextArea fx:id="remediationTextArea" wrapText="true" editable="false"/>
-                </Tab>
-            </TabPane>
-        </Tab>
-        
-        <!-- Logs Tab -->
-        <Tab text="Logs">
-            <TextArea fx:id="logTextArea" editable="false" styleClass="log-area"/>
-        </Tab>
-    </TabPane>
 </VBox>

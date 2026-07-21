@@ -3,21 +3,28 @@
 OffensiveRed has **three layers**. Know which one you're starting:
 
 ```
-┌─────────────┐    ┌──────────────────────┐    ┌──────────────────────────────┐
-│ JavaFX GUI  │ ─▶ │ OffensiveRed backend │ ─▶ │ Decepticon runtime           │
-│ (desktop)   │    │ FastAPI  :8000       │    │ LangGraph :2024 + LLM proxy  │
-│             │    │ backend/runner.py    │    │ :4000 + sandbox (Docker)     │
-└─────────────┘    └──────────────────────┘    └──────────────────────────────┘
-   you build         this repo (verified)         upstream PurpleAILAB stack
+┌─────────────┐    ┌──────────────────────────────┐    ┌────────────────────────────┐
+│ JavaFX GUI  │ ─▶ │ OffensiveRed backend         │ ─▶ │ Decepticon backing services│
+│ (desktop)   │    │ FastAPI  :8000               │    │ LLM proxy :4000 + sandbox  │
+│             │    │ backend/runner.py            │    │ (+ optional KG store)      │
+│             │    │ builds & runs the decepticon │    │                            │
+│             │    │ orchestrator *in-process*    │    │                            │
+└─────────────┘    └──────────────────────────────┘    └────────────────────────────┘
+   you build         this repo (verified)                upstream PurpleAILAB stack
 ```
+
+The backend follows Decepticon's documented **library-usage** path: it builds the
+agent with `create_decepticon_agent()` and runs the LangGraph orchestrator *inside the
+backend process* — there is **no separate LangGraph platform server** to stand up.
 
 There are two ways to run it:
 
 - **Dev / wiring mode** — backend + GUI only. The pipeline works end-to-end, but a
-  scan fails fast with *"runtime not reachable"*. Nothing offensive happens. Use this
-  to confirm the app itself works. **No Docker, no API keys needed.**
-- **Full mode** — also stand up the Decepticon runtime so scans produce real findings.
-  **Needs Docker + an LLM API key.**
+  scan fails fast with a clear *backing-services-not-reachable* message. Nothing
+  offensive happens. Use this to confirm the app itself works. **No Docker, no API
+  keys needed.**
+- **Full mode** — also stand up Decepticon's LLM proxy + sandbox so scans actually
+  execute. **Needs Docker + an LLM API key.**
 
 ---
 
@@ -33,7 +40,7 @@ Smoke-test in another terminal:
 
 ```bash
 curl http://127.0.0.1:8000/health
-# {"status":"ok","engine":"decepticon","version":"1.0.0"}
+# {"status":"ok","engine":"decepticon","integration":"library","agent":"decepticon","version":"1.0.0"}
 ```
 
 Leave this running.
@@ -58,9 +65,11 @@ Reports** tabs.
 
 > Prefer no GUI? Skip this and drive the backend with `curl` (see section 4).
 
-## 3. Decepticon runtime (only for real findings)
+## 3. Decepticon backing services (only for real findings)
 
-This is upstream PurpleAILAB infrastructure and runs in **Docker**.
+The orchestrator runs **in-process** inside the backend, so you do **not** need the
+LangGraph platform server. You do still need Decepticon's LLM proxy and bash sandbox,
+which the upstream PurpleAILAB stack provides via **Docker**:
 
 ```bash
 # install the official Decepticon control CLI
@@ -69,7 +78,7 @@ curl -fsSL https://decepticon.red/install | bash
 # configure an LLM provider + credentials (stored in ~/.decepticon/.env)
 decepticon onboard          # pick Anthropic/OpenAI/Gemini/Ollama, paste your key
 
-# start the containerized stack (LangGraph :2024, LLM proxy :4000, sandbox, dashboard :3000)
+# start the containerized stack (LLM proxy :4000, sandbox, dashboard :3000, ...)
 decepticon
 
 # helpers
@@ -78,15 +87,20 @@ decepticon logs
 decepticon stop
 ```
 
-Our backend talks to `DECEPTICON_API_URL` (default `http://localhost:2024`). If your
-stack uses a different URL, set it **before** launching the backend:
+`LLMFactory` resolves models through the proxy at `http://localhost:4000` and the
+specialist sub-agents run bash in the sandbox. **Reported findings** additionally
+require Decepticon's KnowledgeGraph store (Neo4j via `DECEPTICON_NEO4J_URI` /
+`DECEPTICON_NEO4J_USER` / `DECEPTICON_NEO4J_PASSWORD`); without it a run still
+executes but returns zero findings.
+
+Optional — pick which agent the backend drives (defaults to the full orchestrator):
 
 ```bash
-# PowerShell:  $env:DECEPTICON_API_URL = "http://localhost:2024"
-export DECEPTICON_API_URL="http://localhost:2024"
+# PowerShell:  $env:OFFENSIVERED_AGENT = "recon"
+export OFFENSIVERED_AGENT="recon"   # run one specialist instead of the orchestrator
 ```
 
-Once the runtime is up, scans started from the GUI (or via curl) return real results.
+Once the services are up, scans started from the GUI (or via curl) return real results.
 
 ## 4. Driving it via the API (no GUI)
 
@@ -108,7 +122,9 @@ else→standard.
 
 | Symptom | Cause / fix |
 | --- | --- |
-| Scan ends `failed`, "runtime not reachable" | Decepticon runtime isn't up (section 3). Expected in dev mode. |
+| Scan ends `failed`, "backing services not reachable" | Decepticon's LLM proxy / sandbox isn't up (section 3). Expected in dev mode. |
+| Scan `completed` with 0 findings | Run executed but no KnowledgeGraph store configured (section 3), or nothing was found. |
+| First scan takes a while at `building-agent` | Normal — the agent (and its sub-agents) is built once per process, then reused. |
 | Logs show `No credentials detected` | No LLM key configured — run `decepticon onboard` or set `ANTHROPIC_API_KEY`. |
 | GUI won't start, `mvn` not found | Install Maven (section 2). |
 | GUI can't reach backend | Make sure section 1 is running on `127.0.0.1:8000`. |
