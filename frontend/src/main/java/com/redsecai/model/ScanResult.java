@@ -1,10 +1,13 @@
 package com.redsecai.model;
 
+import com.fasterxml.jackson.annotation.JsonIgnoreProperties;
+
 import java.util.Map;
 
 /**
- * Model for scan result
+ * Response from {@code GET /scan/result/{id}}.
  */
+@JsonIgnoreProperties(ignoreUnknown = true)
 public class ScanResult {
     private String scanId;
     private String target;
