@@ -1,16 +1,38 @@
-"""Thin adapter that drives the real ``decepticon`` CLI.
+"""In-process adapter that drives the real ``decepticon`` library.
 
 This module is the *only* glue between the OffensiveRed backend and the
 upstream `Decepticon <https://github.com/PurpleAILAB/Decepticon>`_ framework.
-It does not reimplement any scanning logic -- it shells out to the supported
-``decepticon-cli scan`` entry point (run as ``python -m decepticon.cli scan``),
-streams its JSONL events into a per-scan log, and parses the SARIF document the
-CLI writes into the finding list the JavaFX GUI consumes.
+It follows Decepticon's documented **library-usage** path
+(https://github.com/PurpleAILAB/Decepticon/blob/main/docs/library-usage.md):
+the engagement is built with the published agent factory
+(``decepticon.agents.standard.decepticon.create_decepticon_agent``) and run
+*in-process* over the LangGraph runnable interface. There is no CLI subprocess
+and no separate LangGraph platform server -- the compiled orchestrator graph
+executes inside this process.
 
-The CLI routes the actual operation to Decepticon's LangGraph runtime
-(``$DECEPTICON_API_URL``, default ``http://localhost:2024``) and an LLM proxy.
-Those services, plus credentials, are the operator's responsibility; if they
-are not reachable the CLI exits with a config error which is surfaced verbatim.
+Findings are read back exactly the way Decepticon's own ``scan`` CLI does: the
+engagement's ``graph.json`` KnowledgeGraph is exported to SARIF via
+``decepticon.tools.research.sarif_export.export_findings_to_sarif`` and then
+flattened into the finding list the JavaFX GUI consumes. No scanning or
+reporting logic is reimplemented here.
+
+A real run still needs Decepticon's backing services, which are the operator's
+responsibility:
+
+* an **LLM provider / proxy** resolved by ``LLMFactory`` (default
+  ``http://localhost:4000``), and
+* the **bash sandbox** used by the specialist sub-agents.
+
+Findings additionally require the **KnowledgeGraph store** (Neo4j via
+``DECEPTICON_NEO4J_*``); without it a run still executes but reports zero
+findings, just like the upstream CLI. When the LLM/sandbox services are not
+reachable the run fails fast with a clear message and never attacks anything
+on its own.
+
+By default the full ``decepticon`` orchestrator (all specialist sub-agents) is
+driven. Set ``OFFENSIVERED_AGENT`` to a single role (e.g. ``recon``) to build
+and run one specialist instead -- useful on constrained setups where standing
+up the whole stack is not practical.
 """
 
 from __future__ import annotations
@@ -19,17 +41,14 @@ import asyncio
 import json
 import os
 import re
-import subprocess
-import sys
-import tempfile
 import threading
 import time
 import uuid
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Optional
+from typing import Any, Optional
 
-# OffensiveRed scan scope -> Decepticon --scan-mode profile.
+# OffensiveRed scan scope -> Decepticon scan-mode profile.
 _SCOPE_TO_MODE = {
     "quick": "quick",
     "full": "deep",
@@ -38,7 +57,7 @@ _SCOPE_TO_MODE = {
     "api": "standard",
 }
 
-# Wall-clock caps per mode (seconds) so a scan can't leave a zombie process.
+# Wall-clock caps per mode (seconds) so a run can't hang forever.
 _MODE_TIMEOUT = {"quick": 600, "standard": 1800, "deep": 3600}
 
 # SARIF result.level -> GUI severity label.
@@ -49,21 +68,38 @@ _LEVEL_SEVERITY = {
     "none": "Info",
 }
 
+# Which Decepticon agent factory to drive. "decepticon" is the full
+# orchestrator; any specialist role (recon, exploit, ...) is also valid.
+_AGENT_ROLE = os.environ.get("OFFENSIVERED_AGENT", "decepticon").strip() or "decepticon"
+
 _SCHEME_RE = re.compile(r"^[a-z][a-z0-9+.\-]*://", re.IGNORECASE)
 
 
 def _normalize_target(target: str) -> str:
-    """Make a GUI target acceptable to ``decepticon-cli --target``.
+    """Promote a bare host/domain to an ``https://`` URL for the brief.
 
-    The CLI treats a value without a URL/VCS scheme as a filesystem path and
-    rejects it if it doesn't exist, so a bare host/domain is promoted to https.
+    A value that is already a URL, a VCS ref, or an existing filesystem path is
+    left untouched; anything else is treated as a web target.
     """
     t = target.strip()
-    if _SCHEME_RE.match(t) or t.startswith(("git@", "ssh://")):
+    if _SCHEME_RE.match(t) or t.startswith(("git@", "git+", "ssh://")):
         return t
     if Path(t).exists():
         return t
     return f"https://{t}"
+
+
+def _engagement_workspace(engagement: str) -> Path:
+    """Directory Decepticon persists the engagement under.
+
+    Mirrors the upstream ``scan`` CLI: honour
+    ``DECEPTICON_ENGAGEMENT_WORKSPACE`` when set, otherwise fall back to
+    ``~/.decepticon/workspace/<engagement>``.
+    """
+    override = os.environ.get("DECEPTICON_ENGAGEMENT_WORKSPACE")
+    if override:
+        return Path(override)
+    return Path.home() / ".decepticon" / "workspace" / engagement
 
 
 @dataclass
@@ -79,7 +115,6 @@ class ScanRecord:
     status: str = "pending"          # pending|running|completed|failed
     current_phase: str = "queued"
     progress: float = 0.0
-    returncode: Optional[int] = None
     error: Optional[str] = None
     logs: list[str] = field(default_factory=list)
     results: dict = field(default_factory=dict)
@@ -102,7 +137,6 @@ class ScanRecord:
             "status": self.status,
             "current_phase": self.current_phase,
             "progress": round(self.progress, 3),
-            "returncode": self.returncode,
             "error": self.error,
             "created_at": self.created_at,
             "completed_at": self.completed_at,
@@ -124,11 +158,15 @@ class ScanRecord:
 
 
 class DecepticonRunner:
-    """Launches and tracks ``decepticon-cli scan`` subprocesses."""
+    """Builds and drives a Decepticon agent in-process for each scan."""
 
     def __init__(self) -> None:
         self.scans: dict[str, ScanRecord] = {}
         self._tasks: dict[str, asyncio.Task] = {}
+        self.role = _AGENT_ROLE
+        # The compiled agent is expensive to build and is reused across scans.
+        self._agent: Any = None
+        self._agent_lock = threading.Lock()
 
     # -- lifecycle -------------------------------------------------------------
     async def start_scan(
@@ -147,169 +185,258 @@ class DecepticonRunner:
         )
         record.log(
             f"Queued Decepticon scan of '{target}' "
-            f"(scan-mode={mode}, safe_mode={safe_mode})."
+            f"(agent={self.role}, scan-mode={mode}, safe_mode={safe_mode})."
         )
         self.scans[scan_id] = record
-        # The CLI is blocking; run it on a worker thread so it cooperates with
-        # the event loop and works the same on every OS (no Proactor caveats).
+        # Building and running the graph is blocking/CPU-bound; keep it off the
+        # event loop so /health and status polling stay responsive.
         self._tasks[scan_id] = asyncio.create_task(
             asyncio.to_thread(self._run_blocking, record)
         )
         return scan_id
 
-    def _build_command(self, record: ScanRecord, sarif_path: Path) -> list[str]:
-        cmd = [
-            sys.executable, "-m", "decepticon.cli", "scan",
-            "--target", _normalize_target(record.target),
-            "--scan-mode", record.scan_mode,
-            "--non-interactive",
-            "--sarif-output", str(sarif_path),
-            "--engagement-name", record.engagement,
-            "--fail-on", "none",  # findings shouldn't be reported as a failure
-        ]
-        if record.safe_mode:
-            cmd += [
-                "--instruction",
-                "Authorized engagement only. Prefer passive, non-destructive, "
-                "read-only checks; do not perform exploitation.",
-            ]
-        return cmd
+    # -- agent construction ----------------------------------------------------
+    def _get_agent(self) -> Any:
+        """Build the Decepticon agent once and cache it (thread-safe)."""
+        with self._agent_lock:
+            if self._agent is not None:
+                return self._agent
+            # Imported lazily: importing decepticon is heavy, so a plain
+            # ``import backend`` (e.g. for /health) must not pull it in.
+            import decepticon.agents as agents_pkg  # noqa: PLC0415
 
+            factory = getattr(agents_pkg, f"create_{self.role}_agent", None)
+            if factory is None:
+                raise ValueError(
+                    f"Unknown Decepticon agent role {self.role!r}. Set "
+                    "OFFENSIVERED_AGENT to 'decepticon' or a specialist role "
+                    "such as 'recon'."
+                )
+            self._agent = factory()
+            return self._agent
+
+    def _build_invocation(
+        self, record: ScanRecord, workspace: Path
+    ) -> tuple[dict, dict]:
+        """Construct the (state_input, config) pair for the LangGraph run.
+
+        Mirrors the upstream ``scan`` CLI: the scope/RoE travel as a JSON block
+        in the opening user message, and the engagement slug + workspace are
+        injected through ``config.configurable`` (the launcher channel the
+        ``EngagementContextMiddleware`` hydrates into state).
+        """
+        scope_payload = {
+            "targets": [_normalize_target(record.target)],
+            "scope_mode": "full",
+            "scan_mode": record.scan_mode,
+            "safe_mode": record.safe_mode,
+            "instruction": self._instruction(record),
+        }
+        content = (
+            "Run a one-shot authorized security engagement. Scope and rules of "
+            "engagement are attached as JSON:\n\n"
+            + json.dumps(scope_payload, indent=2)
+        )
+        state_input = {
+            "messages": [{"role": "user", "content": content}],
+            "engagement_name": record.engagement,
+        }
+        config = {
+            "configurable": {
+                "engagement_name": record.engagement,
+                "workspace_path": str(workspace),
+                "scan_mode": record.scan_mode,
+            }
+        }
+        return state_input, config
+
+    @staticmethod
+    def _instruction(record: ScanRecord) -> str:
+        if record.safe_mode:
+            return (
+                "Authorized engagement only. Prefer passive, non-destructive, "
+                "read-only checks; do not perform exploitation."
+            )
+        return "Authorized engagement. Standard rules of engagement apply."
+
+    # -- execution -------------------------------------------------------------
     def _run_blocking(self, record: ScanRecord) -> None:
         record.status = "running"
         record.started_at = time.time()
         record.current_phase = "starting"
-        timeout = _MODE_TIMEOUT.get(record.scan_mode, 1800)
-
-        with tempfile.TemporaryDirectory(prefix="offensivered-") as tmp:
-            sarif_path = Path(tmp) / "decepticon.sarif"
-            cmd = self._build_command(record, sarif_path)
-            record.log("Invoking: " + " ".join(cmd[2:]))  # hide python path noise
-
-            try:
-                proc = subprocess.Popen(
-                    cmd,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.STDOUT,
-                    text=True,
-                    bufsize=1,
-                    env=os.environ.copy(),
-                )
-            except OSError as exc:
-                record.status = "failed"
-                record.error = f"Failed to launch decepticon-cli: {exc}"
-                record.log(record.error)
-                record.completed_at = time.time()
-                return
-
-            killer = threading.Timer(timeout, self._kill, args=(proc, record))
-            killer.start()
-            try:
-                self._pump_output(proc, record)
-                record.returncode = proc.wait()
-            finally:
-                killer.cancel()
-
-            self._finalize(record, sarif_path)
-
-    @staticmethod
-    def _kill(proc: subprocess.Popen, record: ScanRecord) -> None:
-        if proc.poll() is None:
-            record.error = "Scan exceeded its time budget and was terminated."
-            record.log(record.error)
-            proc.kill()
-
-    def _pump_output(self, proc: subprocess.Popen, record: ScanRecord) -> None:
-        assert proc.stdout is not None
-        for raw in proc.stdout:
-            line = raw.rstrip()
-            if not line:
-                continue
-            phase, text = self._interpret(line)
-            if phase:
-                record.current_phase = phase
-            record.log(text)
-
-    @staticmethod
-    def _interpret(line: str) -> tuple[Optional[str], str]:
-        """Turn a CLI stdout line (JSONL event or log text) into (phase, text)."""
         try:
-            event = json.loads(line)
-        except (ValueError, TypeError):
-            return None, line[:500]
-        if isinstance(event, dict) and "type" in event:
-            etype = str(event.get("type"))
-            data = event.get("data")
-            snippet = ""
-            if isinstance(data, dict):
-                snippet = str(data.get("name") or data.get("node") or "")
-            return (etype or None), f"event: {etype} {snippet}".strip()
-        return None, line[:500]
+            asyncio.run(self._arun(record))
+        except Exception as exc:  # last-resort safety net
+            record.error = record.error or f"Scan crashed: {exc}"
+            record.status = "failed"
+            record.current_phase = "failed"
+            record.progress = 1.0
+            record.completed_at = time.time()
+            record.log(record.error)
 
-    def _finalize(self, record: ScanRecord, sarif_path: Path) -> None:
-        findings = self._parse_sarif(sarif_path, record)
+    async def _arun(self, record: ScanRecord) -> None:
+        timeout = _MODE_TIMEOUT.get(record.scan_mode, 1800)
+        workspace = _engagement_workspace(record.engagement)
+        try:
+            workspace.mkdir(parents=True, exist_ok=True)
+        except OSError as exc:
+            record.log(f"Could not create workspace {workspace}: {exc}")
+
+        record.current_phase = "building-agent"
+        record.log(
+            f"Building Decepticon '{self.role}' agent "
+            "(the first scan in a process can take a while)..."
+        )
+        try:
+            agent = self._get_agent()
+        except Exception as exc:
+            record.error = self._explain_failure(exc)
+            record.log(f"Agent construction failed: {exc}")
+            self._finalize(record, workspace)
+            return
+
+        state_input, config = self._build_invocation(record, workspace)
+        record.current_phase = "running"
+        record.log(
+            f"Invoking Decepticon in-process "
+            f"(engagement={record.engagement}, timeout={timeout}s)."
+        )
+        try:
+            await asyncio.wait_for(
+                self._stream(record, agent, state_input, config), timeout
+            )
+        except asyncio.TimeoutError:
+            record.error = "Scan exceeded its time budget and was cancelled."
+            record.log(record.error)
+        except Exception as exc:
+            record.error = self._explain_failure(exc)
+            record.log(f"Scan run error: {exc}")
+
+        self._finalize(record, workspace)
+
+    async def _stream(
+        self, record: ScanRecord, agent: Any, state_input: dict, config: dict
+    ) -> None:
+        async for item in agent.astream(
+            state_input, config=config, stream_mode=["updates", "custom"]
+        ):
+            self._handle_stream_item(record, item)
+
+    def _handle_stream_item(self, record: ScanRecord, item: Any) -> None:
+        """Turn a LangGraph stream item into a phase update / log line."""
+        if isinstance(item, tuple) and len(item) == 2:
+            mode, chunk = item
+        else:
+            mode, chunk = None, item
+        if mode == "updates" and isinstance(chunk, dict):
+            for node, delta in chunk.items():
+                record.current_phase = str(node)
+                text = self._describe_update(node, delta)
+                record.log(text)
+        elif mode == "custom":
+            record.log(f"event: {str(chunk)[:300]}")
+
+    @staticmethod
+    def _describe_update(node: Any, delta: Any) -> str:
+        """Best-effort one-liner for an ``updates`` stream chunk."""
+        snippet = ""
+        if isinstance(delta, dict):
+            messages = delta.get("messages")
+            if isinstance(messages, list) and messages:
+                last = messages[-1]
+                content = getattr(last, "content", None)
+                if content is None and isinstance(last, dict):
+                    content = last.get("content")
+                if isinstance(content, list):
+                    content = " ".join(
+                        str(p.get("text", "")) if isinstance(p, dict) else str(p)
+                        for p in content
+                    )
+                snippet = str(content or "").strip().replace("\n", " ")[:200]
+        return f"step: {node} {snippet}".strip()
+
+    # -- finalization ----------------------------------------------------------
+    def _finalize(self, record: ScanRecord, workspace: Path) -> None:
+        findings = self._collect_findings(record, workspace)
         report = self._build_report(record, findings)
+        graph_present = (workspace / "graph.json").exists()
         record.results = {
             "findings": findings,
             "attack_paths": [],  # Decepticon SARIF does not model chained paths
             "report": report,
             "scan_mode": record.scan_mode,
             "engagement": record.engagement,
-            "sarif_present": sarif_path.exists(),
+            "agent_role": self.role,
+            "sarif_present": graph_present,
         }
         record.progress = 1.0
         record.completed_at = time.time()
-        rc = record.returncode
 
-        if rc in (0, 1):
-            record.status = "completed"
-            record.current_phase = "completed"
-            record.log(f"Scan completed (exit {rc}); {len(findings)} finding(s).")
-        else:
+        if record.error:
             record.status = "failed"
             record.current_phase = "failed"
-            if not record.error:
-                record.error = self._explain_failure(rc, record.logs)
-            record.log(f"Scan failed (exit {rc}). {record.error}")
+            record.log(f"Scan failed. {record.error}")
+        else:
+            record.status = "completed"
+            record.current_phase = "completed"
+            record.log(f"Scan completed; {len(findings)} finding(s).")
 
     _RUNTIME_HINT = (
-        "Decepticon's runtime is not reachable. A scan needs the Decepticon "
-        "LangGraph server (DECEPTICON_API_URL, default http://localhost:2024) "
-        "and an LLM provider/proxy running with valid credentials. The wiring "
-        "is fine -- those backing services just aren't up yet."
+        "Decepticon's backing services are not reachable. An in-process run "
+        "needs an LLM provider/proxy (LLMFactory, default http://localhost:4000) "
+        "and the bash sandbox; findings additionally need the KnowledgeGraph "
+        "store (DECEPTICON_NEO4J_*). The library wiring is fine -- those "
+        "services just aren't up yet."
     )
     _CONNECTION_SIGNATURES = (
         "all connection attempts failed",
         "getaddrinfo failed",
         "connection refused",
+        "connection error",
         "connecterror",
+        "apiconnectionerror",
+        "llm proxy unreachable",
         "failed to establish",
         "no credentials detected",
+        "localhost:4000",
+        "max retries exceeded",
     )
 
     @classmethod
-    def _explain_failure(cls, rc: Optional[int], logs: list[str]) -> str:
-        recent = " ".join(logs[-40:]).lower()
-        if any(sig in recent for sig in cls._CONNECTION_SIGNATURES):
+    def _explain_failure(cls, exc: Exception) -> str:
+        text = f"{type(exc).__name__}: {exc}".lower()
+        if any(sig in text for sig in cls._CONNECTION_SIGNATURES):
             return cls._RUNTIME_HINT
-        if rc == 2:
-            return (
-                "Decepticon reported a configuration/invocation error (see logs)."
-            )
-        if rc == 3:
-            return "Decepticon hit an internal error during the scan (see logs)."
-        return f"decepticon-cli exited with status {rc} (see logs)."
+        return f"Decepticon run error ({type(exc).__name__}): {exc}"
 
-    # -- SARIF parsing ---------------------------------------------------------
-    def _parse_sarif(self, sarif_path: Path, record: ScanRecord) -> list[dict]:
-        if not sarif_path.exists():
+    # -- findings (SARIF) ------------------------------------------------------
+    def _collect_findings(self, record: ScanRecord, workspace: Path) -> list[dict]:
+        """Export the engagement graph to SARIF and flatten it into findings.
+
+        Uses Decepticon's own exporter; when no ``graph.json`` was persisted
+        (e.g. the KnowledgeGraph store was not configured) this is zero
+        findings, exactly as the upstream ``scan`` CLI reports.
+        """
+        graph_path = workspace / "graph.json"
+        if not graph_path.exists():
+            record.log(
+                f"No graph.json at {graph_path}; treating as zero findings."
+            )
             return []
         try:
-            doc = json.loads(sarif_path.read_text(encoding="utf-8"))
-        except (ValueError, OSError) as exc:
-            record.log(f"Could not parse SARIF output: {exc}")
-            return []
+            from decepticon_core.types.kg import KnowledgeGraph  # noqa: PLC0415
+            from decepticon.tools.research.sarif_export import (  # noqa: PLC0415
+                export_findings_to_sarif,
+            )
 
+            graph = KnowledgeGraph.from_json(graph_path.read_text(encoding="utf-8"))
+            doc = export_findings_to_sarif(graph, engagement_name=record.engagement)
+        except Exception as exc:  # noqa: BLE001
+            record.log(f"Could not load/export findings graph: {exc}")
+            return []
+        return self._findings_from_sarif_doc(doc)
+
+    def _findings_from_sarif_doc(self, doc: dict) -> list[dict]:
         findings: list[dict] = []
         for run in doc.get("runs", []):
             rules = self._rule_index(run)
@@ -392,7 +519,8 @@ class DecepticonRunner:
             f"Target: {record.target}\n"
             f"Engagement: {record.engagement}\n"
             f"Scan Mode: {record.scan_mode}\n"
-            f"Engine: Decepticon (PurpleAILAB)\n\n"
+            f"Agent: {self.role}\n"
+            f"Engine: Decepticon (PurpleAILAB), in-process library\n\n"
             f"Total Findings: {len(findings)}\n"
             + "\n".join(f"  {sev}: {counts[sev]}" for sev in order)
             + "\n"
@@ -418,7 +546,8 @@ class DecepticonRunner:
             technical = (
                 "TECHNICAL REPORT\n================\n\n"
                 "No findings were returned. If you expected results, confirm the "
-                "Decepticon runtime is running and check the Logs tab."
+                "Decepticon LLM/sandbox services are running and that the "
+                "KnowledgeGraph store is configured, then check the Logs tab."
             )
             remediation = "REMEDIATION GUIDE\n=================\n\nNo findings to remediate."
 
